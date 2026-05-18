@@ -1,0 +1,8 @@
+{
+  "name": "RV-RQ Infrastructure Inventory Scanner",
+  "description": "High-speed service discovery and inventory tool for authorized infrastructure testing. Features CIDR scanning, TXT file processing, and real-time service identification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
