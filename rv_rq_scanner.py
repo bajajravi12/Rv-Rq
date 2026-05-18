@@ -59,6 +59,10 @@ class RV_RQ_Engine:
         self.scanned = 0
         self.hits = 0
         self.total = len(targets) * len(ports)
+        self.fingerprints = set()
+        self.lock = concurrent.futures.ThreadPoolExecutor()._shutdown_lock if hasattr(concurrent.futures.ThreadPoolExecutor(), '_shutdown_lock') else None
+        # Deep analysis signatures
+        self.cdn_srv = ["cloudfront", "edge", "akamai", "ghs", "ws", "verizon", "fastly", "gws", "google"]
         self.headers = {
             "Upgrade": "websocket",
             "Connection": "Upgrade",
@@ -70,9 +74,9 @@ class RV_RQ_Engine:
     def check_target(self, target_data):
         host, port = target_data
         url = f"{'https' if port == 443 else 'http'}://{host}:{port}"
+        timestamp = datetime.now().strftime("%H:%M:%S")
         
         try:
-            # Ultra-tight timeout for high-speed scanning
             response = requests.get(
                 url, 
                 headers=self.headers, 
@@ -81,51 +85,89 @@ class RV_RQ_Engine:
                 allow_redirects=False
             )
             
-            # CRITICAL FILTER: Strict 101 Switching Protocols check
-            if response.status_code == 101:
-                timestamp = datetime.now().strftime("%H:%M:%S")
-                server = response.headers.get("Server", "CloudFront SSH Proxy + SNI")
-                
+            status = response.status_code
+            server = response.headers.get("Server", "Unknown").lower()
+            upgrade = response.headers.get("Upgrade", "").lower()
+            location = response.headers.get("Location", "")
+            
+            # Signature Calculation for Unique Bug Detection
+            fingerprint = f"{server}|{status}|{upgrade}|{location}"
+            
+            is_hit = False
+            hit_reason = ""
+
+            # GOLD STANDARD: Switching Protocols
+            if status == 101:
+                is_hit = True
+                hit_reason = "101 Switching Protocols"
+            
+            # SILVER: Specific CDN Signatures
+            elif any(cdn in server for cdn in self.cdn_srv):
+                is_hit = True
+                hit_reason = f"Verified CDN: {server.upper()}"
+            
+            # BRONZE: WebSocket upgrade supported
+            elif "websocket" in upgrade:
+                is_hit = True
+                hit_reason = "WebSocket Tunnel Ready"
+            
+            # CLOAKED: No server header but interesting behavior
+            elif server == "unknown" and (status in [301, 302, 101]):
+                is_hit = True
+                hit_reason = "Cloaked/Deceptive CDN"
+
+            if is_hit:
                 hit_data = {
                     "host": host,
                     "port": port,
-                    "server": server,
-                    "status": "HTTP/1.1 101 Switching Protocols",
-                    "time": timestamp
+                    "server": server.upper(),
+                    "status": f"HTTP/1.1 {status} {response.reason}",
+                    "time": timestamp,
+                    "reason": hit_reason
                 }
-                self.hits += 1
-                self.results.append(hit_data)
-                self.print_hit(hit_data)
+                
+                # Only show HIT box for unique fingerprints to prevent spam
+                if fingerprint not in self.fingerprints:
+                    self.fingerprints.add(fingerprint)
+                    self.hits += 1
+                    self.results.append(hit_data)
+                    self.print_hit(hit_data)
+            
+            self.scanned += 1
+            self.print_progress(host, port, status, response.reason, timestamp)
                 
         except Exception:
-            pass
-        finally:
             self.scanned += 1
-            self.print_progress(host, port)
+            self.print_progress(host, port, "ERR", "Connection Failed", timestamp, Fore.RED)
 
-    def print_progress(self, host, port):
-        # Professional single-line rolling counter
-        sys.stdout.write(f"\r{Fore.WHITE}[{Fore.CYAN}{self.scanned}{Fore.WHITE}/{Fore.CYAN}{self.total}{Fore.WHITE}] {Fore.YELLOW}Scanning: {host}:{port} {Style.RESET_ALL}")
+    def print_progress(self, host, port, status, reason, ts, color=None):
+        if not color:
+            if status in [101, 200, 101]: color = Fore.GREEN
+            elif status in [403, 502, 503]: color = Fore.YELLOW
+            else: color = Fore.RED if isinstance(status, str) else Fore.WHITE
+
+        pct = (self.scanned / self.total) * 100
+        # Replicated high-fidelity log style
+        log = f"{Fore.WHITE}Progress: {Fore.CYAN}{self.scanned}{Fore.WHITE}/{Fore.CYAN}{self.total}{Fore.WHITE} ({pct:.1f}%) ... {Fore.YELLOW}{ts} {Fore.WHITE}... {Fore.CYAN}{host}:{port} {color}HTTP/1.1 {status} {reason}{Style.RESET_ALL}"
+        sys.stdout.write(f"\r{log}\n") 
         sys.stdout.flush()
 
     def print_hit(self, res):
-        # Beautifully formatted visual block for HITS
-        sys.stdout.write("\r" + " " * 80 + "\r")
-        print(f"{Fore.GREEN}============================================================")
-        print(f"{Fore.GREEN}✓  {Fore.WHITE}HIT [{res['time']}]")
-        print(f"   {Fore.GREEN}Proxy  : {Fore.WHITE}{res['host']}:{res['port']}")
+        # Premium HIT Box implementation
+        print(f"\n{Fore.GREEN}============================================================")
+        print(f"{Fore.GREEN}✓  {Fore.WHITE}HIT {Fore.GREEN}[{res['time']}] {Fore.YELLOW}({res['reason']})")
+        print(f"   {Fore.GREEN}Proxy  : {Fore.WHITE}{Style.BRIGHT}{res['host']}:{res['port']}")
         print(f"   {Fore.WHITE}Server : {res['server']}")
-        print(f"   {Fore.WHITE}Status : {Fore.WHITE}HTTP/1.1 {Fore.RED}{Style.BRIGHT}101 Switching Protocols")
-        print(f"{Fore.GREEN}============================================================")
+        print(f"   {Fore.WHITE}Status : {Fore.RED}{Style.BRIGHT}{res['status']}")
+        print(f"{Fore.GREEN}============================================================\n")
 
     def start_scan(self):
-        print(f"\n{Fore.CYAN}╔══════════════ SCANNING ENGINE ══════════════╗")
+        print(f"\n{Fore.CYAN}╔══════════════ CORE ANALYTICS ENGINE ══════════════╗")
         print(f"║ {Fore.WHITE}TARGETS : {len(self.targets):<32} ║")
         print(f"║ {Fore.WHITE}THREADS : {self.workers:<32} ║")
-        print(f"║ {Fore.WHITE}TIMEOUT : 0.8s                             ║")
-        print(f"{Fore.CYAN}╚═════════════════════════════════════════════╝\n")
+        print(f"║ {Fore.WHITE}ENGINE  : SIGNATURE ANALYSIS v3.0          ║")
+        print(f"{Fore.CYAN}╚═══════════════════════════════════════════════════╝\n")
 
-        # Prep the queue
         target_queue = []
         for host in self.targets:
             for port in self.ports:
@@ -138,17 +180,17 @@ class RV_RQ_Engine:
 
     def summary(self):
         print(f"\n\n{Fore.GREEN}Scan Complete!")
-        print(f"{Fore.WHITE}Total Scanned : {self.scanned}")
-        print(f"{Fore.GREEN}Valid HITS    : {self.hits}")
+        print(f"{Fore.WHITE}Analysed      : {self.scanned}")
+        print(f"{Fore.GREEN}Unique HITS   : {self.hits}")
         
         if self.hits > 0:
-            save = input(f"\n{Fore.YELLOW}Save HITS to file? [Y/N]: ").lower()
+            save = input(f"\n{Fore.YELLOW}Export Unique Bugs? [Y/N]: ").lower()
             if save == 'y':
-                fname = f"hits_{datetime.now().strftime('%Y%H%M')}.txt"
+                fname = f"engine_hits_{datetime.now().strftime('%m%d%H%M')}.txt"
                 with open(fname, "w") as f:
                     for h in self.results:
-                        f.write(f"{h['host']}:{h['port']} | {h['status']} | {h['server']}\n")
-                print(f"{Fore.GREEN}Saved to {fname}")
+                        f.write(f"{h['host']}:{h['port']} | {h['reason']} | {h['status']}\n")
+                print(f"{Fore.GREEN}Deep-scan results saved to {fname}")
 
 def validate_cidr(cidr):
     try:
