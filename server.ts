@@ -131,14 +131,25 @@ async function startServer() {
             status: response.status,
             statusText: response.statusText,
             server: response.headers['server'] || 'Unknown',
-            redirects: response.request?._redirectable?._redirectCount || 0,
+            protocol: response.config.url?.startsWith('https') ? 'HTTPS/1.1' : 'HTTP/1.1',
             latency: Date.now() - startTime,
             timestamp: new Date().toLocaleTimeString(),
           };
 
           scan.results.push(result);
-        } catch (e) {
-          // Silent failure for dead hosts, but increment progress
+          scan.lastLive = result;
+        } catch (e: any) {
+          // Send back individual errors as results for the progress feed
+          scan.lastLive = {
+            host,
+            port,
+            status: e.response?.status || 0,
+            statusText: e.response?.statusText || (e.code === 'ECONNABORTED' ? 'Timeout' : 'Connection Refused'),
+            server: 'N/A',
+            protocol: port === 443 ? 'HTTPS/1.1' : 'HTTP/1.1',
+            latency: 0,
+            timestamp: new Date().toLocaleTimeString()
+          };
         }
         
         completed++;
@@ -182,7 +193,8 @@ async function startServer() {
         progress: currentScan.progress,
         total: currentScan.total,
         status: currentScan.status,
-        results: currentScan.results.slice(-5), // only send last 5 live results to keep payload small
+        lastLive: currentScan.lastLive,
+        results: currentScan.results, 
         summary: currentScan.status === "completed" ? {
           totalTargets: currentScan.targets.length,
           liveResults: currentScan.results.length,

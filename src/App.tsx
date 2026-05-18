@@ -21,7 +21,7 @@ interface ScanResult {
   status: number;
   statusText: string;
   server: string;
-  redirects: number;
+  protocol: string;
   latency: number;
   timestamp: string;
 }
@@ -31,6 +31,7 @@ interface ScanProgress {
   total: number;
   status: string;
   results: ScanResult[];
+  lastLive: ScanResult | null;
   summary: {
     totalTargets: number;
     liveResults: number;
@@ -72,9 +73,14 @@ export default function App() {
       const data: ScanProgress = JSON.parse(event.data);
       setProgress(data);
       
-      if (data.results.length > 0) {
-        const lastResult = data.results[data.results.length - 1];
-        setLogs(prev => [...prev.slice(-100), `✓ LIVE: ${lastResult.host}:${lastResult.port} - HTTP ${lastResult.status} (${lastResult.server})`]);
+      const pct = data.total ? ((data.progress / data.total) * 100).toFixed(1) : "0.0";
+      
+      // Update logs with exact requested format
+      if (data.lastLive) {
+        setLogs(prev => [...prev.slice(-150), `Progress: ${data.progress}/${data.total} (${pct}%) [${data.progress}/${data.total}] ${data.lastLive?.host}:${data.lastLive?.port} ${data.lastLive?.protocol} ${data.lastLive?.status} ${data.lastLive?.statusText}`]);
+      } else if (data.progress % 10 === 0) {
+        // Just show basic progress if no hit
+        setLogs(prev => [...prev.slice(-150), `Progress: ${data.progress}/${data.total} (${pct}%) [${data.progress}/${data.total}] Scanning...`]);
       }
 
       if (data.status === "completed") {
@@ -93,7 +99,7 @@ export default function App() {
 
   const handleStartScan = async (type: "cidr" | "txt") => {
     try {
-      setLogs([`Initialing ${type.toUpperCase()} scan...`]);
+      setLogs([`> Initializing RV-RQ ${type.toUpperCase()} scanner...`]);
       const res = await fetch("/api/scan/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -123,166 +129,193 @@ export default function App() {
   };
 
   const renderBanner = () => (
-    <div className="flex flex-col items-center justify-center py-6 border-b border-zinc-800 mb-6">
-      <motion.div 
-        initial={{ scale: 0.9, opacity: 0 }}
-        animate={{ scale: 1, opacity: 1 }}
-        className="text-4xl font-bold tracking-tighter text-zinc-100"
-      >
-        RV-RQ
-      </motion.div>
-      <div className="text-zinc-500 text-xs font-mono tracking-widest mt-1">
-        Made by Rv-Rq
-      </div>
+    <div className="flex flex-col items-center justify-center py-6 border-2 border-zinc-800 bg-zinc-950/50 mb-8 relative">
+      <pre className="text-cyan-400 font-mono text-[8px] md:text-[10px] leading-tight select-none">
+{`
+╔════════════════════════════════════════════╗
+║                                            ║
+║   ▄██████╗ ██╗   ██╗      ██████╗  ██████╗║
+║   ██╔══██╗██║   ██║      ██╔══██╗██╔═══██║
+║   ██████╔╝██║   ██║█████╗██████╔╝██║▄▄ ██║
+║   ██╔══██╗╚██╗ ██╔╝╚════╝██╔══██╗██║▀▀ ██║
+║   ██║  ██║ ╚████╔╝       ██║  ██║╚██████╔╝
+║   ╚═╝  ╚═╝  ╚═══╝        ╚═╝  ╚══▀▀═╝ ╚═══╝
+║                                            ║
+║            ⚡ MADE BY RV-RQ ⚡             ║
+║                                            ║
+╚════════════════════════════════════════════╝
+`}
+      </pre>
     </div>
   );
 
   const renderMainMenu = () => (
-    <div className="space-y-4 max-w-lg mx-auto">
-      {[
-        { id: MenuOption.CIDR, label: "CIDR Scan", icon: <Terminal size={18} />, color: "text-blue-400" },
-        { id: MenuOption.TXT, label: "TXT File Scan", icon: <FileText size={18} />, color: "text-green-400" },
-        { id: MenuOption.MAIN, label: "Resume Scan", icon: <Play size={18} />, color: "text-yellow-400", disabled: true },
-        { id: MenuOption.SAVED, label: "Saved Results", icon: <Save size={18} />, color: "text-purple-400" },
-        { id: "EXIT", label: "Exit", icon: <X size={18} />, color: "text-red-400" }
-      ].map((opt, i) => (
-        <motion.button
-          key={opt.id}
-          initial={{ x: -20, opacity: 0 }}
-          animate={{ x: 0, opacity: 1 }}
-          transition={{ delay: i * 0.1 }}
-          onClick={() => opt.id !== "EXIT" && !opt.disabled && setCurrentMenu(opt.id as MenuOption)}
-          className={`w-full flex items-center gap-4 p-4 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-600 transition-all group ${opt.disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-        >
-          <span className={`${opt.color} group-hover:scale-110 transition-transform`}>{opt.icon}</span>
-          <span className="flex-1 text-left font-mono text-zinc-300">[{i + 1}] {opt.label}</span>
-          <ChevronRight size={14} className="text-zinc-600 group-hover:translate-x-1 transition-transform" />
-        </motion.button>
-      ))}
+    <div className="space-y-6 max-w-lg mx-auto">
+      {/* SYSTEM BOX */}
+      <div className="bg-black border border-zinc-800 rounded-none overflow-hidden">
+        <div className="bg-zinc-900/50 px-4 py-1 text-[10px] font-black tracking-[0.3em] text-zinc-500 border-b border-zinc-800">SYSTEM STATUS</div>
+        <div className="p-4 font-mono text-xs space-y-1">
+          <div className="flex justify-between"><span className="text-zinc-500">STATUS</span> <span className="text-cyan-400">● READY</span></div>
+          <div className="flex justify-between"><span className="text-zinc-500">MODE</span> <span className="text-zinc-300">TERMUX OPTIMIZED</span></div>
+          <div className="flex justify-between"><span className="text-zinc-500">THREADS</span> <span className="text-zinc-300">AUTO</span></div>
+          <div className="flex justify-between"><span className="text-zinc-500">ENGINE</span> <span className="text-cyan-400">RV-RQ SCAN CORE</span></div>
+        </div>
+      </div>
+
+      <div className="bg-black border-2 border-zinc-800 p-1">
+        <div className="bg-zinc-900/30 px-6 py-2 border-b border-zinc-800 text-center font-mono font-bold text-xs tracking-widest text-zinc-400">
+          ╔═══════════════ RV-RQ MENU ═══════════════╗
+        </div>
+        <div className="p-2 space-y-1">
+          {[
+            { id: MenuOption.CIDR, label: "⚡ CIDR SCAN", index: "01" },
+            { id: MenuOption.TXT, label: "📂 TXT FILE SCAN", index: "02" },
+            { id: MenuOption.MAIN, label: "♻ RESUME SCAN", index: "03" },
+            { id: MenuOption.SAVED, label: "💾 SAVED RESULTS", index: "04" },
+            { id: "SETTINGS", label: "⚙ SETTINGS", index: "05" },
+            { id: "EXIT", label: "❌ EXIT", index: "00", color: "text-rose-500" }
+          ].map((opt) => (
+            <button
+              key={opt.id}
+              onClick={() => opt.id !== "EXIT" && setCurrentMenu(opt.id as MenuOption)}
+              className={`w-full flex items-center gap-4 p-3 font-mono text-left hover:bg-zinc-900 transition-colors group relative`}
+            >
+              <span className={`text-zinc-400 font-bold w-12 group-hover:text-cyan-400 transition-colors`}>[{opt.index}]</span>
+              <span className={`flex-1 text-sm ${opt.color || 'text-zinc-300'} font-bold`}>{opt.label}</span>
+              <ChevronRight size={14} className="text-zinc-800 group-hover:text-cyan-500 transition-colors" />
+            </button>
+          ))}
+        </div>
+        <div className="bg-zinc-900/30 px-6 py-2 border-t border-zinc-800 text-center font-mono font-bold text-xs tracking-widest text-zinc-400">
+          ╚═══════════════════════════════════════════╝
+        </div>
+      </div>
+      
+      <div className="text-[10px] font-mono text-zinc-700 text-center uppercase tracking-[0.5em] animate-pulse">
+        ╭─ RV-RQ ►
+      </div>
     </div>
   );
 
   const renderInputForm = (type: "cidr" | "txt") => (
     <motion.div 
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="space-y-6 max-w-2xl mx-auto"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="space-y-6 max-w-xl mx-auto"
     >
-      <div className="space-y-2">
-        <label className="text-zinc-400 text-xs font-mono uppercase tracking-widest block">
-          {type === "cidr" ? "Enter CIDR Range (e.g. 192.168.1.0/24)" : "Enter Targets (one per line)"}
-        </label>
-        {type === "cidr" ? (
-          <input 
-            type="text"
-            value={inputVal}
-            onChange={(e) => setInputVal(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-md p-3 text-zinc-100 font-mono focus:outline-hidden focus:border-zinc-500 transition-colors"
-            placeholder="10.0.0.0/24"
-          />
-        ) : (
-          <textarea 
-            value={inputVal}
-            onChange={(e) => setInputVal(e.target.value)}
-            className="w-full bg-zinc-900 border border-zinc-800 rounded-md p-3 text-zinc-100 font-mono h-40 focus:outline-hidden focus:border-zinc-500 transition-colors"
-            placeholder="example.com&#10;1.2.3.4&#10;https://target.local"
-          />
-        )}
-      </div>
+      <div className="bg-zinc-950 border-2 border-zinc-800">
+        <div className="bg-zinc-900 px-6 py-2 border-b-2 border-zinc-800 text-center font-mono font-black text-sm tracking-tighter text-white italic">
+           ╔══════════════ {type.toUpperCase()} MODE ══════════════╗
+        </div>
+        <div className="p-6 space-y-6">
+          <div className="space-y-2">
+            <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">INPUT VECTOR</label>
+            {type === "cidr" ? (
+              <input 
+                type="text"
+                value={inputVal}
+                onChange={(e) => setInputVal(e.target.value)}
+                className="w-full bg-black border border-zinc-800 p-4 text-cyan-400 font-mono text-sm focus:outline-hidden focus:border-cyan-500 transition-all font-bold"
+                placeholder="56.228.0.0/23"
+              />
+            ) : (
+              <textarea 
+                value={inputVal}
+                onChange={(e) => setInputVal(e.target.value)}
+                className="w-full bg-black border border-zinc-800 p-4 text-cyan-400 font-mono text-sm h-40 focus:outline-hidden focus:border-cyan-500 transition-all font-bold resize-none"
+                placeholder="targets.txt data..."
+              />
+            )}
+          </div>
 
-      <div className="space-y-2">
-        <label className="text-zinc-400 text-xs font-mono uppercase tracking-widest block">
-          Select Ports (comma separated)
-        </label>
-        <input 
-          type="text"
-          value={portsVal}
-          onChange={(e) => setPortsVal(e.target.value)}
-          className="w-full bg-zinc-900 border border-zinc-800 rounded-md p-3 text-zinc-100 font-mono focus:outline-hidden focus:border-zinc-500 transition-colors"
-          placeholder="80,443,8080"
-        />
-        <p className="text-zinc-500 text-[10px] font-mono italic">Default: 80, 443, 8080</p>
-      </div>
-
-      <div className="flex gap-4">
-        <button 
-          onClick={() => setCurrentMenu(MenuOption.MAIN)}
-          className="flex-1 p-3 rounded-md bg-zinc-800 text-zinc-300 font-mono hover:bg-zinc-700 transition-colors"
-        >
-          Cancel
-        </button>
-        <button 
-          onClick={() => handleStartScan(type)}
-          className="flex-1 p-3 rounded-md bg-zinc-100 text-zinc-900 font-mono font-bold hover:bg-white transition-colors"
-        >
-          Start Scan
-        </button>
+          <div className="space-y-2">
+            <label className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">PORT RANGE</label>
+            <input 
+              type="text"
+              value={portsVal}
+              onChange={(e) => setPortsVal(e.target.value)}
+              className="w-full bg-black border border-zinc-800 p-4 text-amber-500 font-mono text-sm focus:outline-hidden focus:border-amber-500 transition-all font-bold"
+              placeholder="80,443,8080"
+            />
+          </div>
+        </div>
+        <div className="bg-zinc-900 p-2 flex gap-2">
+          <button 
+            onClick={() => setCurrentMenu(MenuOption.MAIN)}
+            className="flex-1 p-3 bg-zinc-800 text-zinc-400 font-mono text-xs font-bold hover:bg-zinc-700 uppercase"
+          >
+            [ CANCEL ]
+          </button>
+          <button 
+            onClick={() => handleStartScan(type)}
+            className="flex-1 p-3 bg-cyan-600 text-white font-mono text-xs font-black hover:bg-cyan-500 uppercase shadow-[0_0_15px_rgba(6,182,212,0.4)]"
+          >
+            [ START_SCAN ]
+          </button>
+        </div>
       </div>
     </motion.div>
   );
 
   const renderScanning = () => (
-    <div className="flex flex-col h-[70vh] gap-4">
-      {/* HUD */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-        <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-md">
-          <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-widest">Progress</div>
-          <div className="text-zinc-100 font-mono text-xl">
-            {progress?.total ? ((progress.progress / progress.total) * 100).toFixed(1) : 0}%
+    <div className="flex flex-col h-[75vh] gap-4">
+      {/* HUD GAUGE */}
+      <div className="grid grid-cols-4 gap-2">
+        {[
+          { l: "PROC", v: `${progress?.total ? ((progress.progress / progress.total) * 100).toFixed(1) : 0}%`, c: "text-cyan-400" },
+          { l: "HIT", v: progress?.results.length || 0, c: "text-lime-400" },
+          { l: "REMAIN", v: (progress?.total || 0) - (progress?.progress || 0), c: "text-zinc-500" },
+          { l: "TPS", v: "AUTO", c: "text-zinc-500" }
+        ].map((s, i) => (
+          <div key={i} className="bg-zinc-950 border border-zinc-900 p-2 text-center">
+            <div className="text-[8px] text-zinc-700 font-black tracking-widest">{s.l}</div>
+            <div className={`font-mono text-lg font-black ${s.c}`}>{s.v}</div>
           </div>
-        </div>
-        <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-md">
-          <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-widest">Tasks</div>
-          <div className="text-zinc-100 font-mono text-xl">
-            {progress?.progress || 0}/{progress?.total || 0}
-          </div>
-        </div>
-        <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-md">
-          <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-widest">Live Services</div>
-          <div className="text-green-400 font-mono text-xl">
-            {progress?.results.length || 0}
-          </div>
-        </div>
-        <div className="bg-zinc-900 border border-zinc-800 p-3 rounded-md">
-          <div className="text-zinc-500 text-[10px] uppercase font-bold tracking-widest">Status</div>
-          <div className="text-zinc-100 font-mono text-xl flex items-center gap-2">
-            {progress?.status === "running" ? (
-              <Loader2 className="animate-spin text-blue-400" size={16} />
-            ) : progress?.status === "completed" ? (
-              <CheckCircle2 className="text-green-400" size={16} />
-            ) : (
-              <AlertCircle className="text-yellow-400" size={16} />
-            )}
-            <span className="capitalize">{progress?.status || "Starting..."}</span>
-          </div>
-        </div>
+        ))}
       </div>
 
-      {/* Progress Bar */}
-      <div className="w-full bg-zinc-900 h-2 rounded-full overflow-hidden border border-zinc-800">
-        <motion.div 
-          initial={{ width: 0 }}
-          animate={{ width: `${progress ? (progress.progress / progress.total) * 100 : 0}%` }}
-          className="h-full bg-blue-500"
-        />
-      </div>
-
-      {/* Terminal Output */}
-      <div className="flex-1 bg-black border border-zinc-800 rounded-md overflow-hidden flex flex-col font-mono text-sm">
-        <div className="bg-zinc-900 px-4 py-2 border-b border-zinc-800 flex justify-between items-center">
-          <span className="text-zinc-500 text-[10px] uppercase font-bold">Terminal Logs</span>
-          <div className="flex gap-2">
-             <button onClick={stopScan} className="text-red-400 hover:text-red-300 text-[10px] uppercase">Stop</button>
-             <button onClick={() => setCurrentMenu(MenuOption.MAIN)} className="text-zinc-400 hover:text-zinc-300 text-[10px] uppercase">Main Menu</button>
-          </div>
+      {/* COMPACT LOGS */}
+      <div className="flex-1 bg-black border-2 border-zinc-900 relative overflow-hidden flex flex-col">
+        <div className="bg-zinc-900 px-4 py-2 border-b border-black flex justify-between items-center">
+          <span className="text-[10px] font-mono text-cyan-400 font-black tracking-widest animate-pulse italic">RV-RQ ENGINE ACTIVE</span>
+          <button onClick={stopScan} className="text-rose-500 font-mono text-[10px] font-bold hover:underline">[ STOP ]</button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 space-y-1 custom-scrollbar">
+        
+        <div className="flex-1 overflow-y-auto p-4 space-y-0.5 custom-scrollbar font-mono text-[11px]">
           {logs.map((log, i) => (
-            <div key={i} className={log.startsWith("✓") ? "text-green-400" : log.startsWith("Error") ? "text-red-400" : "text-zinc-400"}>
-              <span className="opacity-30 mr-2">[{new Date().toLocaleTimeString()}]</span>
+            <div key={i} className={log.includes("200 OK") ? "text-lime-400 font-bold" : "text-zinc-600"}>
               {log}
             </div>
           ))}
+          
+          {/* POP OVERLAY HIT BOX */}
+          <AnimatePresence>
+            {progress?.lastLive && (
+              <motion.div 
+                key={progress.lastLive.timestamp}
+                initial={{ scale: 0.8, opacity: 0, y: 20 }}
+                animate={{ scale: 1, opacity: 1, y: 0 }}
+                exit={{ scale: 0.8, opacity: 0 }}
+                className="my-4 mx-auto max-w-sm sticky bottom-4 z-50 shadow-[0_0_40px_rgba(34,197,94,0.3)]"
+              >
+                <div className="bg-black border-2 border-lime-500 text-lime-400 font-mono text-[11px]">
+                  <div className="bg-lime-500 text-black px-4 py-1 flex justify-between font-black">
+                    <span>╔══════════════ ✓ LIVE HIT ═════════════╗</span>
+                  </div>
+                  <div className="p-4 space-y-1">
+                    <div className="flex justify-between"><span>║ TIME    :</span> <span>{progress.lastLive.timestamp} ║</span></div>
+                    <div className="flex justify-between"><span>║ HOST    :</span> <span className="text-white">{progress.lastLive.host} ║</span></div>
+                    <div className="flex justify-between"><span>║ PORT    :</span> <span className="text-white">{progress.lastLive.port} ║</span></div>
+                    <div className="flex justify-between"><span>║ SERVER  :</span> <span className="text-white truncate max-w-[150px]">{progress.lastLive.server} ║</span></div>
+                    <div className="flex justify-between"><span>║ STATUS  :</span> <span className="text-cyan-400 font-black">{progress.lastLive.protocol} {progress.lastLive.status} {progress.lastLive.statusText} ║</span></div>
+                  </div>
+                  <div className="bg-zinc-900/50 px-4 py-1 text-[10px] opacity-70 text-right">
+                    ╚═══════════════════════════════════════════╝
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
           <div ref={terminalEndRef} />
         </div>
       </div>
